@@ -4,19 +4,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 import cv2
 import numpy as np
+from pydantic import BaseModel
+import google.generativeai as genai
 
+# Crear la instancia de FastAPI
 app = FastAPI()
 
 # Habilitar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Puedes especificar los orígenes permitidos como una lista, ej.: ["http://localhost:8100"]
+    allow_origins=["*"],  # Permitir todos los orígenes; ajusta según sea necesario
     allow_credentials=True,
-    allow_methods=["*"],  # Permite todos los métodos HTTP (GET, POST, etc.)
-    allow_headers=["*"],  # Permite todos los encabezados
+    allow_methods=["*"],  # Permitir todos los métodos HTTP
+    allow_headers=["*"],  # Permitir todos los encabezados
 )
 
-# Carga el modelo YOLO
+# Cargar el modelo YOLO
 model = YOLO("prueba.pt")  # Reemplaza con la ruta real a tu modelo
 
 @app.post("/detect/")
@@ -36,13 +39,23 @@ async def detect(file: UploadFile = File(...)):
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-# Configuración de la API de Gemini
-GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+# Configuración de la API Gemini
 genai.configure(api_key="AIzaSyAl3uj5uNGujqy_W7vCHQC42X-rRLvzb-M")
 
+# Modelo para recibir los ingredientes
+class RecipeRequest(BaseModel):
+    ingredients: list[str]
+
 @app.post("/generate-recipe/")
-async def generate_recipe(ingredients: list[str]):
+async def generate_recipe(request: RecipeRequest):
     try:
+        ingredients = ", ".join(request.ingredients)
+        prompt = (
+            f"Eres un chef profesional. Dame una receta que incluya estos ingredientes: {ingredients}. "
+            "El formato debe incluir el nombre, los ingredientes y los pasos."
+        )
+
+        # Crear la configuración del modelo
         generation_config = {
             "temperature": 0.9,
             "top_p": 1,
@@ -55,27 +68,19 @@ async def generate_recipe(ingredients: list[str]):
             generation_config=generation_config,
         )
 
+        # Crear una sesión de chat
         chat_session = model.start_chat(
             history=[
                 {
                     "role": "user",
-                    "parts": [
-                        f"Eres un chef profesional dame una receta que incluya estos ingredientes: {', '.join(ingredients)}. "
-                        "Estos serán los principales y más importantes. Puedes incluir otros ingredientes también. "
-                        "Si algún ingrediente está en inglés, tradúcelo al español. "
-                        "El formato que quiero es el siguiente:\n\n"
-                        "Primero, el nombre de la receta.\n"
-                        "Segundo, lista de los ingredientes (incluyendo los que te indiqué).\n"
-                        "Tercero, pasos para hacer la receta.\n\n"
-                        "Solo pon lo que te indiqué, no des recomendaciones ni nada más. "
-                        "Y de preferencia, dame una receta ecuatoriana."
-                    ],
+                    "parts": [prompt],
                 }
             ]
         )
 
+        # Enviar el mensaje al modelo y obtener la respuesta
         response = chat_session.send_message("")
         return {"recipe": response.text}
 
-    except Exception as ex:
-        raise HTTPException(status_code=500, detail=str(ex))
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
