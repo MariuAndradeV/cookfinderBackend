@@ -1,11 +1,19 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from pydantic import BaseModel
+
+
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from ultralytics import YOLO
 import cv2
 import numpy as np
-from pydantic import BaseModel
+
+
+from ultralytics import YOLO
 import google.generativeai as genai
+
+# Cargar el modelo YOLO
+model = YOLO("prueba.pt")  # Reemplaza con la ruta real a tu modelo
+genai.configure(api_key="AIzaSyAl3uj5uNGujqy_W7vCHQC42X-rRLvzb-M")
 
 # Crear la instancia de FastAPI
 app = FastAPI()
@@ -19,8 +27,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Cargar el modelo YOLO
-model = YOLO("prueba.pt")  # Reemplaza con la ruta real a tu modelo
 
 @app.post("/detect/")
 async def detect(file: UploadFile = File(...)):
@@ -39,39 +45,55 @@ async def detect(file: UploadFile = File(...)):
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-# Configuración de la API Gemini
-try:
-    genai.configure(api_key="AIzaSyAl3uj5uNGujqy_W7vCHQC42X-rRLvzb-M")
-except Exception as e:
-    raise RuntimeError(f"Error al configurar Gemini: {e}")
 
-# Modelo para recibir los ingredientes
+# Modelo para la solicitud de ingredientes
 class RecipeRequest(BaseModel):
     ingredients: list[str]
 
 @app.post("/generate-recipe/")
 async def generate_recipe(request: RecipeRequest):
     try:
+        # Convertir la lista de ingredientes a un texto separado por comas
         ingredients = ", ".join(request.ingredients)
         prompt = (
-            f"Eres un chef profesional. Dame una receta que incluya estos ingredientes: {ingredients}. "
-            "El formato debe incluir el nombre, los ingredientes y los pasos."
+            f"Eres un chef profesional dame una receta que incluya estos ingredientes: {ingredients}, estos serán los principales y más importantes. "
+            "Puedes incluir otros ingredientes también. Si algún ingrediente está en inglés, tradúcelo al español. "
+            "El formato que quiero es el siguiente:\n\n"
+            "Primero, el nombre de la receta.\n"
+            "Segundo, lista de los ingredientes (incluyendo los que te indiqué).\n"
+            "Tercero, pasos para hacer la receta.\n\n"
+            "Solo pon lo que te indiqué, no des recomendaciones ni nada más. De preferencia, dame una receta ecuatoriana, es decir, de Ecuador."
         )
 
-        # Enviar el prompt al modelo de Gemini
-        response = genai.chat(
-            messages=[
-                {"role": "system", "content": "Eres un chef profesional."},
-                {"role": "user", "content": prompt}
+        # Crear la configuración del modelo
+        generation_config = {
+            "temperature": 0.9,
+            "top_p": 1,
+            "max_output_tokens": 2048,
+            "response_mime_type": "text/plain",
+        }
+
+        # Crear el modelo
+        model = genai.GenerativeModel(
+            model_name="gemini-pro",
+            generation_config=generation_config,
+        )
+
+        # Crear la sesión de chat
+        chat_session = model.start_chat(
+            history=[
+                {
+                    "role": "user",
+                    "parts": [prompt],
+                }
             ]
         )
-        
-        # Verificar si la respuesta contiene texto
-        if response and "content" in response["messages"][-1]:
-            recipe = response["messages"][-1]["content"]
-            return {"recipe": recipe}
-        else:
-            return JSONResponse(content={"error": "No se obtuvo respuesta del modelo Gemini."}, status_code=500)
+
+        # Enviar el mensaje y obtener la respuesta
+        response = chat_session.send_message(prompt)
+
+        # Retornar la receta generada
+        return {"recipe": response.text}
 
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        raise HTTPException(status_code=500, detail=f"Error al generar la receta: {str(e)}")
