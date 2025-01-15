@@ -13,10 +13,10 @@ app = FastAPI()
 # Habilitar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permitir todos los orígenes; ajusta según sea necesario
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Permitir todos los métodos HTTP
-    allow_headers=["*"],  # Permitir todos los encabezados
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Cargar el modelo YOLO
@@ -40,7 +40,10 @@ async def detect(file: UploadFile = File(...)):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 # Configuración de la API Gemini
-genai.configure(api_key="AIzaSyAl3uj5uNGujqy_W7vCHQC42X-rRLvzb-M")
+try:
+    genai.configure(api_key="AIzaSyAl3uj5uNGujqy_W7vCHQC42X-rRLvzb-M")
+except Exception as e:
+    raise RuntimeError(f"Error al configurar Gemini: {e}")
 
 # Modelo para recibir los ingredientes
 class RecipeRequest(BaseModel):
@@ -55,32 +58,20 @@ async def generate_recipe(request: RecipeRequest):
             "El formato debe incluir el nombre, los ingredientes y los pasos."
         )
 
-        # Crear la configuración del modelo
-        generation_config = {
-            "temperature": 0.9,
-            "top_p": 1,
-            "max_output_tokens": 2048,
-            "response_mime_type": "text/plain",
-        }
-
-        model = genai.GenerativeModel(
-            model_name="gemini-pro",
-            generation_config=generation_config,
-        )
-
-        # Crear una sesión de chat
-        chat_session = model.start_chat(
-            history=[
-                {
-                    "role": "user",
-                    "parts": [prompt],
-                }
+        # Enviar el prompt al modelo de Gemini
+        response = genai.chat(
+            messages=[
+                {"role": "system", "content": "Eres un chef profesional."},
+                {"role": "user", "content": prompt}
             ]
         )
-
-        # Enviar el mensaje al modelo y obtener la respuesta
-        response = chat_session.send_message("")
-        return {"recipe": response.text}
+        
+        # Verificar si la respuesta contiene texto
+        if response and "content" in response["messages"][-1]:
+            recipe = response["messages"][-1]["content"]
+            return {"recipe": recipe}
+        else:
+            return JSONResponse(content={"error": "No se obtuvo respuesta del modelo Gemini."}, status_code=500)
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
